@@ -1,0 +1,12 @@
+6 Nov
+
+Plan:
+- split up tasks
+- clean the data
+- analyse the data
+
+analysis ideas:
+- do a time series analysis on each person
+- compare analytics of different demographics
+- maybe compare people who take the meds for different reasons
+- maybe look at more measurements
