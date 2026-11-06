@@ -1,0 +1,54 @@
+# Code to extract raw data
+
+## Extract every GLP-1 order
+
+SELECT *
+FROM medication
+WHERE WHERE LOWER(CONCAT_WS(' ', generic_name, medication_name)) RLIKE
+  'semaglutide|tirzepatide|liraglutide|dulaglutide|exenatide|lixisenatide|ozempic|wegovy|rybelsus|mounjaro|zepbound|trulicity|victoza|saxenda|byetta|bydureon';
+## Extract BMI from GLP-1 Patients
+
+SELECT *
+FROM flowsheet
+WHERE LOWER(NAME) LIKE '%bmi%'
+  AND pat_id IN (
+    SELECT pat_id
+    FROM medication
+    WHERE LOWER(CONCAT_WS(' ', generic_name, medication_name)) RLIKE
+      'semaglutide|tirzepatide|liraglutide|dulaglutide|exenatide|lixisenatide|ozempic|wegovy|rybelsus|mounjaro|zepbound|trulicity|victoza|saxenda|byetta|bydureon'
+  );
+
+## Extract AC1 for GLP-1 Patients
+
+SELECT *
+FROM lab_result
+WHERE LOWER(component_name) LIKE '%a1c%'
+  AND pat_id IN (
+    SELECT pat_id
+    FROM medication
+    WHERE LOWER(CONCAT_WS(' ', generic_name, medication_name)) RLIKE
+      'semaglutide|tirzepatide|liraglutide|dulaglutide|exenatide|lixisenatide|ozempic|wegovy|rybelsus|mounjaro|zepbound|trulicity|victoza|saxenda|byetta|bydureon'
+  );
+
+## Extract Patient Info for GLP-1 Patients
+
+SELECT *
+FROM patient
+WHERE pat_id IN (
+    SELECT pat_id
+    FROM medication
+    WHERE LOWER(CONCAT_WS(' ', generic_name, medication_name)) RLIKE
+      'semaglutide|tirzepatide|liraglutide|dulaglutide|exenatide|lixisenatide|ozempic|wegovy|rybelsus|mounjaro|zepbound|trulicity|victoza|saxenda|byetta|bydureon'
+  );
+
+## Extract Patient Dx with T2D on GLP1
+
+SELECT *
+FROM diagnosis
+WHERE icd10 LIKE '%E11%'
+  AND pat_id IN (
+    SELECT pat_id
+    FROM medication
+    WHERE LOWER(CONCAT_WS(' ', generic_name, medication_name)) RLIKE
+      'semaglutide|tirzepatide|liraglutide|dulaglutide|exenatide|lixisenatide|ozempic|wegovy|rybelsus|mounjaro|zepbound|trulicity|victoza|saxenda|byetta|bydureon'
+  );
