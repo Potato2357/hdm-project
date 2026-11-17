@@ -239,17 +239,54 @@ def visualise_patient_history(
     return figure
 
 
-if __name__ == "__main__":
+def analyse_patients(patient_list_file: Path, save_file: Path, bmi_data: DataFrame, hba1c_data: DataFrame):
+    """Analyse a list of patients from a CSV file."""
+    with open(patient_list_file, "r") as f:
+        patient_list = [line.strip() for line in f if line.strip()]
+    with open(save_file, "w") as f:
+        f.write("patient_id, BMI_pre_slope_interval_low, BMI_pre_slope_interval_high, BMI_post_slope_interval_low, BMI_post_slope_interval_high, BMI_pts_outside_prediction, HbA1c_pre_slope_interval_low, HbA1c_pre_slope_interval_high, HbA1c_post_slope_interval_low, HbA1c_post_slope_interval_high, HbA1c_pts_outside_prediction \n")
+    for patient_id in patient_list:
+        print(f"Analysing patient {patient_id}...")
+        BMI_history, HbA1c_history = pull_patient_history(bmi_data, hba1c_data, patient_id)
+        analyses = analyse_patient_history(BMI_history.collect(), HbA1c_history.collect())
+        if not analyses:
+            continue
+        else:
+            with open(save_file, "a") as f:
+                f.write(f"{patient_id}, ")
+                if 'BMI' in analyses:
+                    if analyses['BMI'].pre_slope_interval is not None:
+                        f.write(f"{analyses['BMI'].pre_slope_interval[0]}, {analyses['BMI'].pre_slope_interval[1]}, ")
+                    else:
+                        f.write(", , ")
+                    if analyses['BMI'].post_slope_interval is not None:
+                        f.write(f"{analyses['BMI'].post_slope_interval[0]}, {analyses['BMI'].post_slope_interval[1]}, ")
+                    else:
+                        f.write(", , ")
+                    if analyses['BMI'].post_outlier_mask is not None:
+                        f.write(f"{int(analyses['BMI'].post_outlier_mask.sum())}, ")
+                    else:
+                        f.write(", ")
+                else:
+                    f.write(", , , , , ")
+                if 'HbA1c' in analyses:
+                    if analyses['HbA1c'].pre_slope_interval is not None:
+                        f.write(f"{analyses['HbA1c'].pre_slope_interval[0]}, {analyses['HbA1c'].pre_slope_interval[1]}, ")
+                    else:
+                        f.write(", , ")
+                    if analyses['HbA1c'].post_slope_interval is not None:
+                        f.write(f"{analyses['HbA1c'].post_slope_interval[0]}, {analyses['HbA1c'].post_slope_interval[1]}, ")
+                    else:
+                        f.write(", , ")
+                    if analyses['HbA1c'].post_outlier_mask is not None:
+                        f.write(f"{int(analyses['HbA1c'].post_outlier_mask.sum())}")
+                else:
+                    f.write(", , , ,")
+                f.write("\n")
 
-    data_dir = Path(__file__).resolve().parent
-    spark = SparkSession.builder.getOrCreate()
 
-
-    # cohort_data = spark.read.option("header", True).option("inferSchema", True).csv(str(data_dir / "Cohort Data/cohort_5_final.csv"))
-    bmi_data = spark.read.option("header", True).option("inferSchema", True).csv(str(data_dir / "All Readings - BMI + AC1/clean_bmi_2yr_before.csv"))
-    hba1c_data = spark.read.option("header", True).option("inferSchema", True).csv(str(data_dir / "All Readings - BMI + AC1/clean_A1C_2yr_before.csv"))
-
-
+def manual_test(bmi_data: DataFrame, hba1c_data: DataFrame):
+    """Run manual tests of the analysis and visualisation functions."""
     while True:
         patient_id = input("Enter a patient ID (or 'q' to quit): ")
         if patient_id.lower() == "q":
@@ -293,3 +330,16 @@ if __name__ == "__main__":
             BMI_history, HbA1c_history, patient_id, analyses
         )
         plt.show(block=True)
+    
+
+if __name__ == "__main__":
+
+    data_dir = Path(__file__).resolve().parent
+    spark = SparkSession.builder.getOrCreate()
+
+    # cohort_data = spark.read.option("header", True).option("inferSchema", True).csv(str(data_dir / "Cohort Data/cohort_5_final.csv"))
+    bmi_data = spark.read.option("header", True).option("inferSchema", True).csv(str(data_dir / "All Readings - BMI + AC1/clean_bmi_2yr_before.csv"))
+    hba1c_data = spark.read.option("header", True).option("inferSchema", True).csv(str(data_dir / "All Readings - BMI + AC1/clean_A1C_2yr_before.csv"))
+
+    # manual_test(bmi_data, hba1c_data)
+    analyse_patients(data_dir / "patients_of_interest.txt", data_dir / "patient_analysis_results.csv", bmi_data, hba1c_data)

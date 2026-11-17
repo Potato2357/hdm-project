@@ -1,3 +1,6 @@
 /All Readings - BMI + AC1/
 /Cohort Data/
 /SQL Extracted Data/
+/__pycache__/
+patient_analysis_results.csv
+patients_of_interest.txt
