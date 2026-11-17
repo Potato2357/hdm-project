@@ -20,11 +20,11 @@ class RegressionAnalysis:
     values: np.ndarray
     pre_model: linear_model.BayesianRidge | None
     post_model: linear_model.BayesianRidge | None
-    pre_slope_interval: tuple[float, float] | None
-    post_slope_interval: tuple[float, float] | None
-    post_prediction_lower: np.ndarray | None
-    post_prediction_upper: np.ndarray | None
+    slope_change_interval: tuple[float, float] | None
+    trend_change: str | None
     post_outlier_mask: np.ndarray | None
+    outlier_higher_count: int | None
+    outlier_lower_count: int | None
 
 
 def _fit_bayesian_regression(
@@ -36,13 +36,32 @@ def _fit_bayesian_regression(
     return model
 
 
-def _slope_interval(
-    model: linear_model.BayesianRidge, confidence: float = 0.95
+def _slope_change_interval(
+    pre_model: linear_model.BayesianRidge,
+    post_model: linear_model.BayesianRidge,
+    confidence: float = 0.95,
 ) -> tuple[float, float]:
-    """Return a normal approximation to the posterior interval for the slope."""
-    standard_error = float(np.sqrt(model.sigma_[0, 0]))
+    """Return a normal approximation to the posterior interval for post minus pre slope."""
+    slope_change = float(post_model.coef_[0] - pre_model.coef_[0])
+    standard_error = float(
+        np.sqrt(post_model.sigma_[0, 0] + pre_model.sigma_[0, 0])
+    )
     margin = 1.96 * standard_error if confidence == 0.95 else standard_error
-    return float(model.coef_[0] - margin), float(model.coef_[0] + margin)
+    return float(slope_change - margin), float(slope_change + margin)
+
+
+def _classify_trend_change(
+    slope_change_interval: tuple[float, float] | None,
+) -> str | None:
+    """Classify a slope change when its confidence interval excludes zero."""
+    if slope_change_interval is None:
+        return None
+    lower, upper = slope_change_interval
+    if lower > 0:
+        return "increased"
+    if upper < 0:
+        return "decreased"
+    return "neither"
 
 
 def _predictive_interval(
@@ -99,26 +118,29 @@ def analyse_measurements(
         if has_post_treatment_regression
         else None
     )
-    lower = upper = outlier_mask = None
+    slope_change_interval = (
+        _slope_change_interval(pre_model, post_model)
+        if pre_model is not None and post_model is not None
+        else None
+    )
+    lower = upper = outlier_mask = outlier_higher_count = outlier_lower_count = None
     if pre_model is not None and post_mask.any():
         post_dates = dates[post_mask]
         lower, upper = _predictive_interval(pre_model, post_dates)
         outlier_mask = (values[post_mask] < lower) | (values[post_mask] > upper)
+        outlier_higher_count = int((values[post_mask] > upper).sum())
+        outlier_lower_count = int((values[post_mask] < lower).sum())
     return RegressionAnalysis(
         name=name,
         dates=dates,
         values=values,
         pre_model=pre_model,
         post_model=post_model,
-        pre_slope_interval=(
-            _slope_interval(pre_model) if pre_model is not None else None
-        ),
-        post_slope_interval=(
-            _slope_interval(post_model) if post_model is not None else None
-        ),
-        post_prediction_lower=lower,
-        post_prediction_upper=upper,
+        slope_change_interval=slope_change_interval,
+        trend_change=_classify_trend_change(slope_change_interval),
         post_outlier_mask=outlier_mask,
+        outlier_higher_count=outlier_higher_count,
+        outlier_lower_count=outlier_lower_count,
     )
 
 
@@ -199,7 +221,7 @@ def visualise_patient_history(
                 linestyle=":",
                 label=f"{name} post-treatment fit",
             )
-        if analysis.pre_model is not None and analysis.post_prediction_lower is not None:
+        if analysis.pre_model is not None:
             post_dates = analysis.dates # changed from analysis.dates[analysis.dates >= 0]
             post_lower, post_upper = _predictive_interval(
                 analysis.pre_model, post_dates
@@ -225,8 +247,8 @@ def visualise_patient_history(
     bmi_axis.set_xlabel("Date")
     bmi_axis.set_ylabel("BMI", color="tab:blue")
     hba1c_axis.set_ylabel("HbA1c (%)", color="tab:orange")
-    bmi_axis.set_ylim(10, 50)
-    hba1c_axis.set_ylim(0, 15)
+    bmi_axis.set_ylim(0, max(bmi_values) * 1.2)
+    hba1c_axis.set_ylim(0, max(hba1c_values) * 1.2)
     figure.suptitle(f"BMI and HbA1c History for Patient {patient_id}")
 
     lines, labels = [], []
@@ -244,7 +266,7 @@ def analyse_patients(patient_list_file: Path, save_file: Path, bmi_data: DataFra
     with open(patient_list_file, "r") as f:
         patient_list = [line.strip() for line in f if line.strip()]
     with open(save_file, "w") as f:
-        f.write("patient_id, BMI_pre_slope_interval_low, BMI_pre_slope_interval_high, BMI_post_slope_interval_low, BMI_post_slope_interval_high, BMI_pts_outside_prediction, HbA1c_pre_slope_interval_low, HbA1c_pre_slope_interval_high, HbA1c_post_slope_interval_low, HbA1c_post_slope_interval_high, HbA1c_pts_outside_prediction \n")
+        f.write("patient_id, BMI_slope_change_interval_low, BMI_slope_change_interval_high, BMI_trend_change, BMI_pts_higher_than_prediction, BMI_pts_lower_than_prediction, HbA1c_slope_change_interval_low, HbA1c_slope_change_interval_high, HbA1c_trend_change, HbA1c_pts_higher_than_prediction, HbA1c_pts_lower_than_prediction \n")
     for patient_id in patient_list:
         print(f"Analysing patient {patient_id}...")
         BMI_history, HbA1c_history = pull_patient_history(bmi_data, hba1c_data, patient_id)
@@ -255,33 +277,33 @@ def analyse_patients(patient_list_file: Path, save_file: Path, bmi_data: DataFra
             with open(save_file, "a") as f:
                 f.write(f"{patient_id}, ")
                 if 'BMI' in analyses:
-                    if analyses['BMI'].pre_slope_interval is not None:
-                        f.write(f"{analyses['BMI'].pre_slope_interval[0]}, {analyses['BMI'].pre_slope_interval[1]}, ")
+                    if analyses['BMI'].slope_change_interval is not None:
+                        f.write(f"{analyses['BMI'].slope_change_interval[0]}, {analyses['BMI'].slope_change_interval[1]}, {analyses['BMI'].trend_change}, ")
                     else:
-                        f.write(", , ")
-                    if analyses['BMI'].post_slope_interval is not None:
-                        f.write(f"{analyses['BMI'].post_slope_interval[0]}, {analyses['BMI'].post_slope_interval[1]}, ")
+                        f.write(", , , ")
+                    if analyses['BMI'].outlier_higher_count is not None:
+                        f.write(f"{analyses['BMI'].outlier_higher_count}, ")
                     else:
-                        f.write(", , ")
-                    if analyses['BMI'].post_outlier_mask is not None:
-                        f.write(f"{int(analyses['BMI'].post_outlier_mask.sum())}, ")
+                        f.write(", ")
+                    if analyses['BMI'].outlier_lower_count is not None:
+                        f.write(f"{analyses['BMI'].outlier_lower_count}, ")
                     else:
                         f.write(", ")
                 else:
                     f.write(", , , , , ")
                 if 'HbA1c' in analyses:
-                    if analyses['HbA1c'].pre_slope_interval is not None:
-                        f.write(f"{analyses['HbA1c'].pre_slope_interval[0]}, {analyses['HbA1c'].pre_slope_interval[1]}, ")
+                    if analyses['HbA1c'].slope_change_interval is not None:
+                        f.write(f"{analyses['HbA1c'].slope_change_interval[0]}, {analyses['HbA1c'].slope_change_interval[1]}, {analyses['HbA1c'].trend_change}, ")
                     else:
-                        f.write(", , ")
-                    if analyses['HbA1c'].post_slope_interval is not None:
-                        f.write(f"{analyses['HbA1c'].post_slope_interval[0]}, {analyses['HbA1c'].post_slope_interval[1]}, ")
+                        f.write(", , , ")
+                    if analyses['HbA1c'].outlier_higher_count is not None:
+                        f.write(f"{analyses['HbA1c'].outlier_higher_count}, ")
                     else:
-                        f.write(", , ")
-                    if analyses['HbA1c'].post_outlier_mask is not None:
-                        f.write(f"{int(analyses['HbA1c'].post_outlier_mask.sum())}")
+                        f.write(", ")
+                    if analyses['HbA1c'].outlier_lower_count is not None:
+                        f.write(f"{analyses['HbA1c'].outlier_lower_count}")
                 else:
-                    f.write(", , , ,")
+                    f.write(", , , , ")
                 f.write("\n")
 
 
@@ -309,20 +331,21 @@ def manual_test(bmi_data: DataFrame, hba1c_data: DataFrame):
             )
         else:
             for name, analysis in analyses.items():
-                if analysis.pre_model is not None:
+                if analysis.slope_change_interval is not None:
                     print(
-                        f"{name}: pre-treatment slope 95% interval="
-                        f"{analysis.pre_slope_interval}"
+                        f"{name}: post-minus-pre slope 95% interval="
+                        f"{analysis.slope_change_interval}; trend {analysis.trend_change}"
                     )
-                if analysis.post_model is not None:
+                if analysis.outlier_higher_count is not None and analysis.outlier_higher_count > 0:
                     print(
-                        f"{name}: post-treatment slope 95% interval="
-                        f"{analysis.post_slope_interval}"
+                        f"{name}: {analysis.outlier_higher_count} "
+                        "post-treatment point(s) above the pre-treatment "
+                        "95% predictive interval"
                     )
-                if analysis.post_outlier_mask is not None:
+                if analysis.outlier_lower_count is not None and analysis.outlier_lower_count > 0:
                     print(
-                        f"{name}: {int(analysis.post_outlier_mask.sum())} "
-                        "post-treatment point(s) outside the pre-treatment "
+                        f"{name}: {analysis.outlier_lower_count} "
+                        "post-treatment point(s) below the pre-treatment "
                         "95% predictive interval"
                     )
 
